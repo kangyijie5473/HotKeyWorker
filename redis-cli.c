@@ -1278,6 +1278,11 @@ static char **convertToSds(int count, char** args) {
 }
 static int isHotKey(const char *query_key)
 {
+    int i = 0;
+    for(; i < hotkey_nums; i++){
+        if(strcmp(hotkey[i], query_key) == 0)
+            return 1;
+    }
     return 0;
 }
 static int issueCommandRepeat(int argc, char **argv, long repeat) {
@@ -1286,13 +1291,19 @@ static int issueCommandRepeat(int argc, char **argv, long repeat) {
         char *command = argv[0];
         int query_hotkey = 0;
         int exist_hotkey = 0;
-        if(strcasecmp(command, "get") && argc >= 2){
+        if(!strcmp(command, "get") && argc >= 2){
             query_hotkey++;
             if(isHotKey(argv[1]))
                 query_hotkey++;
         }
         if (exist_hotkey && query_hotkey == 2){
             /* If now Server find HotKey ,use HotAgent to get HotKey.*/
+            char cmd[100];
+            int i = 0;
+            for(; i < argc; i++)
+                strcat(cmd, argv[i]);
+            redisCommand(hotagent_context, cmd);
+            return REDIS_OK;
         } else{
             if (cliSendCommand(argc,argv,repeat) != REDIS_OK) {
                 cliConnect(1);
@@ -2829,11 +2840,67 @@ static void intrinsicLatencyMode(void) {
         }
     }
 }
+
+/*------------------------------------------------------------------------------
+ * Thread function deal Hot-Key
+ *--------------------------------------------------------------------------- */
+typedef struct {
+    int type;
+    int length;
+    char load[0];
+}Packet;
+enum packet_type{
+    FIND_HOTKEY = 0;    
+}
+int connectHotAgent(const char hotagent_ip)
+{
+    int fd = socket(AF_INET,SOCK_STREAM,0);
+    assert(fd > 0);
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(struct sockaddr_in));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(5473);
+    inet_aton(hotagent_ip, &server_addr.sin_addr);
+
+    if(connect(fd,(struct sockaddr *)&server_addr, sizeof(struct sockaddr_in)) != -1){
+        return fd;
+    }else
+        return -1;
+}
+char *hotkeys[100];
+char *hotkey_buffer = (char *)malloc(10000);
+int hotkey_nums;
+redisContext *hotagent_context;
 void *dealHotkey(void *arg)
 {
+    char *hotagent_ip = (char *)arg;
+    hotagent_context = redisConnect(hotagent_ip, 6622);
+    if(hotagent_context == NULL)
+        return NULL;
 
-    return NULL;
+    char *buffer = (char *)malloc(1000);
+    Packet *packet = (Packet *)buffer;
+    int fd;
+    if((fd = connectHotAgent(hotagent_ip)) == -1)
+        return NULL;
+    while(1){
+        read(fd, buffer, 8);
+        read(fd, buffer+8, packet->length);
+
+        if(packet->type == FIND_HOTKEY){
+            int length = 0, length_sum = 0;
+            int i = 0;
+            while(length_sum != packet->length){
+                hotkey_nums++;
+                hotkeys[i++] = hotkey_buffer + length_sum;
+                length = sscanf(packet->load + length_sum, "%s", hotkey_buffer +length_sum);
+                length_sum += length;
+            }
+
+        }
+    }
 }
+
 /*------------------------------------------------------------------------------
  * Program main()
  *--------------------------------------------------------------------------- */
@@ -2842,7 +2909,8 @@ int main(int argc, char **argv) {
 
     /* create hotkey worker thread*/
     pthread_t tid;
-    if(pthread_create(&tid, NULL, &dealHotkey, NULL) != 0){
+    char *hotagent_ip = "123.206.89.123";
+    if(pthread_create(&tid, NULL, &dealHotkey, (void *)hotagent_ip) != 0){
         printf("deal hotkey thread create error\n");
         exit(1);
     }
