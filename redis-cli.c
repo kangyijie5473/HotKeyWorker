@@ -1298,11 +1298,15 @@ static int issueCommandRepeat(int argc, char **argv, long repeat) {
         }
         if (exist_hotkey && query_hotkey == 2){
             /* If now Server find HotKey ,use HotAgent to get HotKey.*/
+            redisReply *reply;
             char cmd[100];
             int i = 0;
             for(; i < argc; i++)
                 strcat(cmd, argv[i]);
-            redisCommand(hotagent_context, cmd);
+            reply = redisCommand(hotagent_context, cmd);
+
+            fwrite(reply->str,strlen(reply->str),1,stdout)
+            freeReplyObject(reply);
             return REDIS_OK;
         } else{
             if (cliSendCommand(argc,argv,repeat) != REDIS_OK) {
